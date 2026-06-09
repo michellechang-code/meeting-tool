@@ -297,10 +297,10 @@
 <div id="loginScreen">
   <div class="logo">大量科技股份有限公司</div>
   <h1>產銷會議記錄</h1>
-  <div class="subtitle">請登入並輸入 Groq API Key</div>
+  <div class="subtitle">請登入並輸入 Gemini API Key</div>
   <input type="text" id="loginUser" placeholder="帳號" autocomplete="username">
   <input type="password" id="loginPass" placeholder="密碼" autocomplete="current-password">
-  <input type="password" id="loginApiKey" placeholder="Groq API Key" autocomplete="off">
+  <input type="password" id="loginApiKey" placeholder="Gemini API Key" autocomplete="off">
   <button onclick="doLogin()">登入</button>
   <div id="loginError"></div>
 </div>
@@ -375,8 +375,8 @@
     <div id="progressArea">
       <div class="progress-title">處理中，請稍候…</div>
       <div class="progress-steps">
-        <div class="progress-step" id="step_upload"><span class="icon">⏳</span> 轉換音訊並上傳</div>
-        <div class="progress-step" id="step_analyze"><span class="icon">⏳</span> AI 語音辨識與分析</div>
+        <div class="progress-step" id="step_upload"><span class="icon">⏳</span> 上傳影片至 Gemini</div>
+        <div class="progress-step" id="step_analyze"><span class="icon">⏳</span> AI 分析會議影片內容</div>
         <div class="progress-step" id="step_excel"><span class="icon">⏳</span> 讀取 Excel 報告資料</div>
         <div class="progress-step" id="step_word"><span class="icon">⏳</span> 產生 Word 會議記錄</div>
       </div>
@@ -397,7 +397,7 @@
 
 <script>
 // ── 設定 ──
-let GROQ_API_KEY = ''; // 由使用者登入後輸入
+let GEMINI_API_KEY = ''; // 由使用者登入後輸入
 const ACCOUNTS = {
   'tlpmc':  { pass: 'Tl3686368',  name: '生管部' },
   'sales':  { pass: 'Tl$$$$$$',   name: '營業部' }
@@ -415,13 +415,13 @@ function doLogin() {
   const acc = ACCOUNTS[u];
   const apiKey = document.getElementById('loginApiKey').value.trim();
   if (acc && acc.pass === p && apiKey) {
-    GROQ_API_KEY = apiKey;
+    GEMINI_API_KEY = apiKey;
     document.getElementById('loginScreen').style.display = 'none';
     const ms = document.getElementById('mainScreen');
     ms.style.display = 'flex';
     document.getElementById('userLabel').textContent = acc.name + '　' + u;
   } else if (!apiKey) {
-    document.getElementById('loginError').textContent = '請輸入 Groq API Key。';
+    document.getElementById('loginError').textContent = '請輸入 Gemini API Key。';
   } else {
     document.getElementById('loginError').textContent = '帳號或密碼錯誤，請重新輸入。';
   }
@@ -435,7 +435,7 @@ function doLogout() {
   document.getElementById('loginUser').value = '';
   document.getElementById('loginPass').value = '';
   document.getElementById('loginApiKey').value = '';
-  GROQ_API_KEY = '';
+  GEMINI_API_KEY = '';
   document.getElementById('loginError').textContent = '';
   files = { mp4: null, docx: null, xlsx: null };
   ['badgeMp4','badgeDocx','badgeXlsx'].forEach(id => document.getElementById(id).innerHTML = '');
@@ -495,14 +495,14 @@ async function startGenerate() {
   ['step_upload','step_analyze','step_excel','step_word'].forEach(s => setStep(s, ''));
 
   try {
-    // Step 1: 音訊轉文字
+    // Step 1: 上傳影片至 Gemini
     setStep('step_upload', 'active');
-    const audioBlob = await extractAudio(files.mp4);
+    const videoUri = await uploadVideoToGemini(files.mp4);
     setStep('step_upload', 'done');
 
-    // Step 2: Groq Whisper 轉逐字稿 + 整理
+    // Step 2: Gemini 分析影片
     setStep('step_analyze', 'active');
-    const transcript = await transcribeAndAnalyze(audioBlob);
+    const transcript = await analyzeVideo(videoUri);
     setStep('step_analyze', 'done');
 
     // Step 3: 讀Excel
@@ -532,62 +532,88 @@ async function startGenerate() {
   }
 }
 
-// ── 從 MP4 抽取音訊（轉成 WebM/Opus） ──
-async function extractAudio(file) {
-  // 直接把 MP4 當音訊送給 Whisper（Groq 支援 mp4 直接辨識）
-  return file;
-}
+// ── 上傳影片到 Gemini File API ──
+async function uploadVideoToGemini(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
 
-// ── Groq Whisper 轉逐字稿 + LLM 整理 ──
-async function transcribeAndAnalyze(audioFile) {
-  // Step A: Whisper 轉逐字稿
-  const formData = new FormData();
-  formData.append('file', audioFile, audioFile.name);
-  formData.append('model', 'whisper-large-v3');
-  formData.append('language', 'zh');
-  formData.append('response_format', 'text');
+  const initResp = await fetch(
+    `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': bytes.length,
+        'X-Goog-Upload-Header-Content-Type': 'video/mp4',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ file: { display_name: file.name } })
+    }
+  );
+  if (!initResp.ok) throw new Error('影片上傳初始化失敗：' + await initResp.text());
+  const uploadUrl = initResp.headers.get('X-Goog-Upload-URL');
 
-  const whisperResp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
-    body: formData
-  });
-  if (!whisperResp.ok) throw new Error('語音辨識失敗：' + await whisperResp.text());
-  const rawText = await whisperResp.text();
-
-  // Step B: LLM 整理逐字稿
-  const prompt = `以下是一段產銷會議的逐字稿，請從中找出：
-
-1. 主席詢問「南京有事情要討論嗎」或「漣水有事情要討論嗎」或「台灣有事情要討論嗎」之後的討論內容（其他事項），請逐字記錄各廠發言。
-2. 物料管理相關的數字（如主軸在庫、控制器數量等）。
-
-逐字稿內容：
-${rawText}
-
-請用 JSON 格式回覆，只回覆 JSON 不要有其他文字：
-{"taiwan_other":"台灣廠發言內容","nanjing_other":"南京廠發言內容","lianshui_other":"漣水廠發言內容","material_notes":"物料管理內容（無則空字串）","meeting_date_hint":"提到的日期（無則空字串）"}`;
-
-  const llmResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const uploadResp = await fetch(uploadUrl, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${GROQ_API_KEY}`,
-      'Content-Type': 'application/json'
+      'X-Goog-Upload-Command': 'upload, finalize',
+      'X-Goog-Upload-Offset': '0',
+      'Content-Type': 'video/mp4'
     },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1
-    })
+    body: bytes
   });
-  if (!llmResp.ok) throw new Error('AI 整理失敗：' + await llmResp.text());
-  const llmData = await llmResp.json();
-  const text = llmData.choices?.[0]?.message?.content || '';
+  if (!uploadResp.ok) throw new Error('影片上傳失敗：' + await uploadResp.text());
+  const uploadData = await uploadResp.json();
+  const fileUri = uploadData.file?.uri;
+  if (!fileUri) throw new Error('無法取得影片 URI');
+
+  let state = uploadData.file?.state;
+  let attempts = 0;
+  while (state === 'PROCESSING' && attempts < 30) {
+    await new Promise(r => setTimeout(r, 3000));
+    const statusResp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/files/${uploadData.file.name.split('/').pop()}?key=${GEMINI_API_KEY}`
+    );
+    const statusData = await statusResp.json();
+    state = statusData.file?.state || statusData.state;
+    attempts++;
+  }
+  if (state !== 'ACTIVE') throw new Error('影片處理逾時，請稍後再試。');
+  return fileUri;
+}
+
+// ── Gemini 分析影片 ──
+async function analyzeVideo(videoUri) {
+  const prompt = `這是一個產銷會議錄影。請完成以下兩個任務：
+
+1. 找出會議中主席詢問「南京有事情要討論嗎」或「漣水有事情要討論嗎」或「台灣有事情要討論嗎」之後的討論內容，這段是"其他事項"。請逐字轉錄台灣、南京、漣水各廠的發言內容，盡量完整，包含對照畫面討論的細節。
+
+2. 如果有提到物料管理相關的數字（如主軸在庫數量、控制器數量等），請一併記錄。
+
+請用以下 JSON 格式回覆，只回覆 JSON：
+{"taiwan_other":"台灣廠其他事項逐字內容","nanjing_other":"南京廠其他事項逐字內容","lianshui_other":"漣水廠其他事項逐字內容","material_notes":"物料管理相關內容（如無則填空字串）","meeting_date_hint":"影片中提到的日期或週別（如有）"}`;
+
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { file_data: { mime_type: 'video/mp4', file_uri: videoUri } }] }],
+        generationConfig: { temperature: 0.1 }
+      })
+    }
+  );
+  if (!resp.ok) throw new Error('Gemini 分析失敗：' + await resp.text());
+  const data = await resp.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
   try {
     const clean = text.replace(/```json|```/g, '').trim();
     return JSON.parse(clean);
   } catch {
-    return { taiwan_other: rawText, nanjing_other: '', lianshui_other: '', material_notes: '', meeting_date_hint: '' };
+    return { taiwan_other: text, nanjing_other: '', lianshui_other: '', material_notes: '', meeting_date_hint: '' };
   }
 }
 
@@ -937,4 +963,3 @@ function downloadDocx() {
 </script>
 </body>
 </html>
-
