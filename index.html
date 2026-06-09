@@ -297,9 +297,10 @@
 <div id="loginScreen">
   <div class="logo">大量科技股份有限公司</div>
   <h1>產銷會議記錄</h1>
-  <div class="subtitle">請登入後使用</div>
+  <div class="subtitle">請登入並輸入 Groq API Key</div>
   <input type="text" id="loginUser" placeholder="帳號" autocomplete="username">
   <input type="password" id="loginPass" placeholder="密碼" autocomplete="current-password">
+  <input type="password" id="loginApiKey" placeholder="Groq API Key" autocomplete="off">
   <button onclick="doLogin()">登入</button>
   <div id="loginError"></div>
 </div>
@@ -396,7 +397,7 @@
 
 <script>
 // ── 設定 ──
-const GROQ_API_KEY = 'YOUR_GROQ_API_KEY'; // ← 把這裡換成你的 Groq API Key
+let GROQ_API_KEY = ''; // 由使用者登入後輸入
 const ACCOUNTS = {
   'tlpmc':  { pass: 'Tl3686368',  name: '生管部' },
   'sales':  { pass: 'Tl$$$$$$',   name: '營業部' }
@@ -412,11 +413,15 @@ function doLogin() {
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value;
   const acc = ACCOUNTS[u];
-  if (acc && acc.pass === p) {
+  const apiKey = document.getElementById('loginApiKey').value.trim();
+  if (acc && acc.pass === p && apiKey) {
+    GROQ_API_KEY = apiKey;
     document.getElementById('loginScreen').style.display = 'none';
     const ms = document.getElementById('mainScreen');
     ms.style.display = 'flex';
     document.getElementById('userLabel').textContent = acc.name + '　' + u;
+  } else if (!apiKey) {
+    document.getElementById('loginError').textContent = '請輸入 Groq API Key。';
   } else {
     document.getElementById('loginError').textContent = '帳號或密碼錯誤，請重新輸入。';
   }
@@ -429,6 +434,8 @@ function doLogout() {
   document.getElementById('loginScreen').style.display = 'block';
   document.getElementById('loginUser').value = '';
   document.getElementById('loginPass').value = '';
+  document.getElementById('loginApiKey').value = '';
+  GROQ_API_KEY = '';
   document.getElementById('loginError').textContent = '';
   files = { mp4: null, docx: null, xlsx: null };
   ['badgeMp4','badgeDocx','badgeXlsx'].forEach(id => document.getElementById(id).innerHTML = '');
@@ -930,3 +937,4 @@ function downloadDocx() {
 </script>
 </body>
 </html>
+
